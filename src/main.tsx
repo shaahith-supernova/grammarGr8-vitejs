@@ -1,240 +1,399 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { BookOpen, User, CheckCircle2, AlertCircle, HelpCircle, LayoutDashboard, ShieldAlert } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
+import { BookOpen, CheckCircle2, AlertCircle, HelpCircle, LayoutDashboard, ShieldAlert, Lock, ArrowRight, RotateCcw, Award } from 'lucide-react';
 
-// --- APPLICATION STATE & MOCK DATABASE ---
-const SAMPLE_LESSONS = [
-  { id: 1, category: 'Sentence Basics', number: 1, title: 'Subjects and Predicates', explanation: 'The subject is who/what the sentence is about. The predicate tells what the subject does.', rule: 'Example: [The smart dog] (barked loudly).' },
-  { id: 2, category: 'Present Simple Tense', number: 1, title: 'Third-Person Singular -S', explanation: 'Always add an -s or -es to the action word if the person doing it is a He, She, or It.', rule: 'Example: He walks. She fixes.' }
-];
-
-const SAMPLE_ACTIVITIES = [
-  { id: 1, lessonId: 1, type: 'Multiple Choice', title: 'Find the Subject', instructions: 'Pick the complete subject of the sentence.', question: 'The enthusiastic teacher smiled at the Grade 8 class.', options: ['The enthusiastic teacher', 'smiled at', 'the Grade 8 class'], hint: 'Who is doing the smiling?', answer: 'The enthusiastic teacher', feedback: 'Excellent! "The enthusiastic teacher" is the subject performing the action.' },
-  { id: 2, lessonId: 2, type: 'Fill in the Blank', title: 'Fix the Action Word', instructions: 'Type the correct form of the action word in brackets.', question: 'My clever best friend _______ (write) amazing stories.', hint: 'My best friend is a "he" or "she". Remember the regular rule!', answer: 'writes', feedback: 'Spot on! We add -s because "best friend" is singular third-person.' }
-];
+// --- INITIALIZE LIVE SUPABASE CONNECTION ---
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 function App() {
   const [currentTab, setCurrentTab] = useState<'login' | 'dashboard' | 'lessons' | 'teacher'>('login');
   const [userRole, setUserRole] = useState<'student' | 'teacher'>('student');
   const [username, setUsername] = useState('');
-  const [selectedLesson, setSelectedLesson] = useState<any>(null);
-  const [selectedActivity, setSelectedActivity] = useState<any>(null);
+  const [password, setPassword] = useState('');
+  const [currentUser, setCurrentUser] = useState<any>(null);
   
-  // Activity Engine State
+  // Database Collection Hooks
+  const [lessons, setLessons] = useState<any[]>([]);
+  const [activities, setActivities] = useState<any[]>([]);
+  const [studentAttempts, setStudentAttempts] = useState<any[]>([]);
+  
+  // Navigation & Multi-Question Set Mechanics
+  const [selectedLesson, setSelectedLesson] = useState<any>(null);
+  const [lessonQuestions, setLessonQuestions] = useState<any[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
+  
+  // Interactive Answering Interface States
   const [userAnswer, setUserAnswer] = useState('');
   const [showHint, setShowHint] = useState(false);
   const [checked, setChecked] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [lessonFinished, setLessonFinished] = useState(false);
 
-  // Simple Mock Login Logic
-  const handleLogin = (role: 'student' | 'teacher') => {
-    if (!username.trim()) return alert('Please type a username!');
-    setUserRole(role);
-    setCurrentTab(role === 'teacher' ? 'teacher' : 'dashboard');
+  // Load content structures upon dashboard routing
+  useEffect(() => {
+    if (currentTab !== 'login') {
+      loadSystemData();
+    }
+  }, [currentTab]);
+
+  async function loadSystemData() {
+    const { data: less } = await supabase.from('lessons').select('*').order('id');
+    const { data: acts } = await supabase.from('activities').select('*').order('question_number');
+    
+    if (less) setLessons(less);
+    if (acts) setActivities(acts);
+
+    if (currentUser) {
+      const { data: atts } = await supabase.from('attempts').select('*').eq('student_id', currentUser.id);
+      if (atts) setStudentAttempts(atts);
+    }
+  }
+
+  // Identity Provision Routing
+  const handleAuth = async (targetRole: 'student' | 'teacher') => {
+    if (!username.trim() || !password.trim()) {
+      return alert('Please enter both your custom username and password!');
+    }
+    
+    setLoading(true);
+    const internalEmail = `${username.trim().toLowerCase()}@grammar.local`;
+
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+      email: internalEmail,
+      password: password,
+    });
+
+    if (signInError) {
+      // Secure Auto-Account provisioning for Phase 1 MVP Testing
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: internalEmail,
+        password: password,
+      });
+
+      if (signUpError) {
+        alert(`Authentication Error: ${signUpError.message}`);
+        setLoading(false);
+        return;
+      }
+
+      if (signUpData?.user) {
+        await supabase.from('profiles').insert({
+          id: signUpData.user.id,
+          username: username.trim().toLowerCase(),
+          display_name: username.trim(),
+          role: targetRole,
+          class_group: 'Grade 8 - Room A'
+        });
+        
+        setCurrentUser({ id: signUpData.user.id, username: username.trim(), role: targetRole });
+        setUserRole(targetRole);
+        setCurrentTab(targetRole === 'teacher' ? 'teacher' : 'dashboard');
+      }
+    } else if (signInData?.user) {
+      const { data: prof } = await supabase.from('profiles').select('*').eq('id', signInData.user.id).single();
+      setCurrentUser(prof || { id: signInData.user.id, username: username, role: targetRole });
+      setUserRole((prof?.role as 'student' | 'teacher') || targetRole);
+      setCurrentTab(prof?.role === 'teacher' ? 'teacher' : 'dashboard');
+    }
+    setLoading(false);
   };
 
-  const submitAnswer = (answer: string) => {
-    const isRight = answer.trim().toLowerCase() === selectedActivity.answer.toLowerCase();
+  // Select a lesson and isolate its 5 questions
+  const openLesson = (lesson: any) => {
+    setSelectedLesson(lesson);
+    const questions = activities.filter(act => act.lesson_id === lesson.id);
+    setLessonQuestions(questions);
+    setCurrentQuestionIndex(0);
+    setLessonFinished(false);
+    resetQuestionState();
+  };
+
+  const resetQuestionState = () => {
+    setUserAnswer('');
+    setChecked(false);
+    setIsCorrect(false);
+    setShowHint(false);
+  };
+
+  const verifyAnswer = (answer: string) => {
+    const activeQuestion = lessonQuestions[currentQuestionIndex];
+    if (!activeQuestion) return;
+
+    const isRight = answer.trim().toLowerCase() === activeQuestion.correct_answer.toLowerCase();
     setIsCorrect(isRight);
     setChecked(true);
   };
 
+  // Advance step forward inside the 5-question carousel
+  const advanceToNextQuestion = () => {
+    if (currentQuestionIndex < lessonQuestions.length - 1) {
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
+      resetQuestionState();
+    } else {
+      finalizeLessonScore();
+    }
+  };
+
+  const finalizeLessonScore = async () => {
+    setLessonFinished(true);
+    if (currentUser?.id && selectedLesson) {
+      await supabase.from('attempts').insert({
+        student_id: currentUser.id,
+        lesson_id: selectedLesson.id,
+        total_score: 50 // 5 questions x 10 points
+      });
+      // Update local storage indicators
+      const { data: atts } = await supabase.from('attempts').select('*').eq('student_id', currentUser.id);
+      if (atts) setStudentAttempts(atts);
+    }
+  };
+
+  const activeQuestion = lessonQuestions[currentQuestionIndex];
+
   return (
     <div class="max-w-md mx-auto bg-white min-h-screen shadow-xl flex flex-col justify-between font-sans pb-20">
       
-      {/* HEADER BAR */}
+      {/* HEADER ROW BAR */}
       <header class="bg-indigo-600 text-white p-4 flex justify-between items-center rounded-b-2xl sticky top-0 z-10 shadow-md">
         <h1 class="text-xl font-bold tracking-tight">📝 GrammarUp! G8</h1>
         {currentTab !== 'login' && (
-          <button onClick={() => setCurrentTab('login')} class="text-xs bg-indigo-700 px-3 py-1.5 rounded-full hover:bg-indigo-800 transition">
+          <button onClick={() => { supabase.auth.signOut(); setCurrentTab('login'); }} class="text-xs bg-indigo-700 px-3 py-1.5 rounded-full hover:bg-indigo-800 transition">
             Log Out
           </button>
         )}
       </header>
 
-      {/* MAIN BODY AREA */}
+      {/* CORE CANVAS WORKSPACE */}
       <main class="p-4 flex-grow">
         
-        {/* LOGIN SCREEN */}
+        {/* WELCOME AUTH PANEL */}
         {currentTab === 'login' && (
-          <div class="py-8 space-y-6">
+          <div class="py-6 space-y-6">
             <div class="text-center space-y-2">
-              <div class="text-5xl">✨</div>
-              <h2 class="text-2xl font-extrabold text-slate-800">Welcome Back!</h2>
-              <p class="text-sm text-slate-500">Ready to level up your English skills?</p>
+              <div class="text-5xl">⚡</div>
+              <h2 class="text-2xl font-extrabold text-slate-800">Grade 8 Portal</h2>
+              <p class="text-sm text-slate-500">Perfecting English, one practice block at a time.</p>
             </div>
             <div class="bg-slate-50 p-5 rounded-2xl border border-slate-100 space-y-4">
               <div>
-                <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Grammar Username</label>
-                <input type="text" placeholder="e.g., student001" value={username} onChange={(e) => setUsername(e.target.value)} class="w-full p-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+                <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Student Username</label>
+                <input type="text" placeholder="e.g., nethmi06" value={username} onChange={(e) => setUsername(e.target.value)} class="w-full p-3 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-500 bg-white" />
+              </div>
+              <div>
+                <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Account Password</label>
+                <div class="relative">
+                  <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} class="w-full p-3 pl-9 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-500 bg-white" />
+                  <Lock size={14} class="absolute left-3 top-4 text-slate-400" />
+                </div>
               </div>
               <div class="grid grid-cols-2 gap-3 pt-2">
-                <button onClick={() => handleLogin('student')} class="bg-indigo-600 text-white font-bold p-3 rounded-xl text-sm shadow-sm hover:bg-indigo-700 transition">
-                  🧑‍🎓 Student Log In
+                <button onClick={() => handleAuth('student')} disabled={loading} class="bg-indigo-600 text-white font-bold p-3 rounded-xl text-xs shadow-sm hover:bg-indigo-700 transition">
+                  {loading ? 'Entering...' : '🧑‍🎓 Student Log In'}
                 </button>
-                <button onClick={() => handleLogin('teacher')} class="bg-emerald-600 text-white font-bold p-3 rounded-xl text-sm shadow-sm hover:bg-emerald-700 transition">
-                  👩‍🏫 Teacher Log In
+                <button onClick={() => handleAuth('teacher')} disabled={loading} class="bg-emerald-600 text-white font-bold p-3 rounded-xl text-xs shadow-sm hover:bg-emerald-700 transition">
+                  {loading ? 'Entering...' : '👩‍🏫 Teacher Log In'}
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* STUDENT DASHBOARD */}
+        {/* COMPACT STUDENT DASHBOARD */}
         {currentTab === 'dashboard' && (
           <div class="space-y-5">
             <div class="bg-gradient-to-r from-indigo-500 to-purple-600 p-5 rounded-2xl text-white shadow-sm">
-              <p class="text-xs opacity-80 font-medium">STUDENT PROFILE</p>
-              <h3 class="text-xl font-bold mt-0.5">Hi, {username}! 👋</h3>
+              <p class="text-xs opacity-80 font-medium">STUDENT ACTIVITY FRAME</p>
+              <h3 class="text-xl font-bold mt-0.5">Hello, {currentUser?.display_name || username}! 👋</h3>
               <div class="mt-4 bg-white/20 h-2 rounded-full overflow-hidden">
-                <div class="bg-white h-full w-1/3 rounded-full"></div>
+                <div class="bg-white h-full w-3/5 rounded-full"></div>
               </div>
-              <p class="text-xs mt-2 opacity-90 font-medium">Month 1 Progress: 33% Completed</p>
+              <p class="text-xs mt-2 opacity-90 font-medium">Accumulated Score Metrics: {studentAttempts.reduce((sum, current) => sum + current.total_score, 0)} Total XP</p>
             </div>
 
-            <h4 class="font-bold text-slate-800 text-base">Your Active Badges</h4>
+            <h4 class="font-bold text-slate-800 text-sm">Earned Mastery Badges</h4>
             <div class="grid grid-cols-3 gap-3 text-center">
               <div class="p-3 bg-amber-50 border border-amber-100 rounded-xl"><span class="text-2xl">🔥</span><p class="text-[10px] font-bold text-amber-800 mt-1">First Step</p></div>
-              <div class="p-3 bg-slate-100 opacity-40 rounded-xl"><span class="text-2xl">🎯</span><p class="text-[10px] font-medium text-slate-500 mt-1">Locked</p></div>
-              <div class="p-3 bg-slate-100 opacity-40 rounded-xl"><span class="text-2xl">👑</span><p class="text-[10px] font-medium text-slate-500 mt-1">Locked</p></div>
+              <div class="p-3 bg-indigo-50 border border-indigo-100 rounded-xl"><span class="text-2xl">🎯</span><p class="text-[10px] font-bold text-indigo-800 mt-1">Consistency Tracker</p></div>
+              <div class="p-3 bg-emerald-50 border border-emerald-100 rounded-xl"><span class="text-2xl">⚡</span><p class="text-[10px] font-bold text-emerald-800 mt-1">Syntax Master</p></div>
             </div>
 
-            <button onClick={() => setCurrentTab('lessons')} class="w-full bg-indigo-600 text-white font-bold p-4 rounded-xl shadow-md flex justify-center items-center gap-2 hover:bg-indigo-700 transition">
-              <BookOpen size={18} /> Start Learning Right Now
+            <button onClick={() => setCurrentTab('lessons')} class="w-full bg-indigo-600 text-white font-bold p-4 rounded-xl shadow-md flex justify-center items-center gap-2 hover:bg-indigo-700 transition text-sm">
+              <BookOpen size={18} /> Open Interactive Lessons Path
             </button>
           </div>
         )}
 
-        {/* LESSONS LIST & INTERACTIVE ACTIVITY LOOP */}
+        {/* GRAMMAR PRACTICE PATH SELECTION MENU */}
         {currentTab === 'lessons' && !selectedLesson && (
           <div class="space-y-4">
-            <h3 class="text-lg font-bold text-slate-800">Your Grade 8 Grammar Path</h3>
-            {SAMPLE_LESSONS.map((lesson) => (
-              <div key={lesson.id} onClick={() => { setSelectedLesson(lesson); setSelectedActivity(SAMPLE_ACTIVITIES.find(a => a.lessonId === lesson.id)); setChecked(false); setShowHint(false); setUserAnswer(''); }} class="p-4 bg-white border-2 border-slate-100 hover:border-indigo-200 rounded-2xl shadow-sm cursor-pointer transition flex justify-between items-center">
-                <div>
-                  <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-500">{lesson.category}</span>
-                  <h4 class="font-bold text-slate-800 text-sm mt-0.5">Lesson {lesson.number}: {lesson.title}</h4>
+            <h3 class="text-base font-bold text-slate-800">Grade 8 English Practice Roadmap</h3>
+            {lessons.length === 0 ? (
+              <p class="text-xs text-slate-400 italic">Syncing with direct database arrays...</p>
+            ) : (
+              lessons.map((lesson) => (
+                <div key={lesson.id} onClick={() => openLesson(lesson)} class="p-4 bg-white border-2 border-slate-100 hover:border-indigo-200 rounded-2xl shadow-sm cursor-pointer transition flex justify-between items-center">
+                  <div>
+                    <span class="text-[9px] font-bold uppercase tracking-wider text-indigo-500">Unit Block #{lesson.lesson_number}</span>
+                    <h4 class="font-bold text-slate-800 text-sm mt-0.5">{lesson.title}</h4>
+                  </div>
+                  <span class="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-xl text-xs font-bold">Start Practice</span>
                 </div>
-                <span class="bg-indigo-50 text-indigo-600 p-2 rounded-xl text-xs font-bold">👉 Go</span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
 
-        {/* ACTIVE LESSON VIEW WITH INTERACTIVE ACTIVITY SYSTEM */}
+        {/* ACTIVE LESSON ENGINE WITH CAROUSEL CONTROL LOOPS */}
         {currentTab === 'lessons' && selectedLesson && (
           <div class="space-y-4">
-            <button onClick={() => { setSelectedLesson(null); setSelectedActivity(null); }} class="text-xs text-indigo-600 font-bold bg-indigo-50 px-3 py-1.5 rounded-lg">
-              ← Back to All Lessons
+            <button onClick={() => { setSelectedLesson(null); }} class="text-xs text-indigo-600 font-bold bg-indigo-50 px-3 py-1.5 rounded-lg">
+              ← Return to Units Layout
             </button>
             
             <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-              <span class="text-[10px] font-bold text-indigo-500 uppercase">{selectedLesson.category}</span>
-              <h3 class="text-base font-bold text-slate-800 mt-0.5">{selectedLesson.title}</h3>
-              <p class="text-xs text-slate-600 mt-2 leading-relaxed">{selectedLesson.explanation}</p>
-              <div class="mt-2 bg-indigo-50 border-l-4 border-indigo-500 p-2 text-xs text-indigo-800 font-mono italic rounded-r-lg">
-                {selectedLesson.rule}
-              </div>
+              <h3 class="text-base font-bold text-slate-800">{selectedLesson.title}</h3>
+              <p class="text-xs text-slate-600 mt-1 leading-relaxed">{selectedLesson.short_explanation}</p>
+              {selectedLesson.grammar_rule && (
+                <div class="mt-2 bg-indigo-50 border-l-4 border-indigo-500 p-2 text-xs text-indigo-900 font-mono italic rounded-r-lg">
+                  💡 Grammatical Rule Structure: {selectedLesson.grammar_rule}
+                </div>
+              )}
             </div>
 
-            {selectedActivity && (
-              <div class="bg-white border-2 border-slate-100 p-4 rounded-2xl space-y-4 shadow-sm">
-                <div class="flex justify-between items-center border-b pb-2">
-                  <span class="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-md">{selectedActivity.type} Activity</span>
-                  <button onClick={() => setShowHint(!showHint)} class="text-xs text-indigo-600 flex items-center gap-1 font-semibold">
-                    <HelpCircle size={14} /> {showHint ? "Hide Hint" : "Need a Hint?"}
-                  </button>
-                </div>
+            {/* PROGRESS BAR INDICATOR (TRACKS QUESTIONS 1 TO 5) */}
+            {!lessonFinished && lessonQuestions.length > 0 && (
+              <div class="bg-slate-100 rounded-full h-2 overflow-hidden flex">
+                {lessonQuestions.map((_, idx) => (
+                  <div key={idx} class={`h-full flex-grow border-r border-white last:border-0 transition-colors ${idx <= currentQuestionIndex ? 'bg-indigo-600' : 'bg-slate-200'}`} />
+                ))}
+              </div>
+            )}
 
-                {showHint && (
-                  <div class="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-xs">
-                    💡 <strong>Hint:</strong> {selectedActivity.hint}
+            {/* MAIN PLAYABLE AREA */}
+            {!lessonFinished ? (
+              activeQuestion ? (
+                <div class="bg-white border-2 border-slate-100 p-4 rounded-2xl space-y-4 shadow-sm">
+                  <div class="flex justify-between items-center border-b pb-2">
+                    <span class="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-md">
+                      Question {currentQuestionIndex + 1} of {lessonQuestions.length}
+                    </span>
+                    <button onClick={() => setShowHint(!showHint)} class="text-xs text-indigo-600 flex items-center gap-1 font-semibold">
+                      <HelpCircle size={14} /> {showHint ? "Hide Suggestion" : "Need Hint?"}
+                    </button>
                   </div>
-                )}
 
-                <div class="space-y-2">
-                  <p class="text-xs text-slate-500 italic">{selectedActivity.instructions}</p>
-                  <p class="text-sm font-bold text-slate-800 bg-slate-50 p-3 rounded-xl">{selectedActivity.question}</p>
-                </div>
-
-                {/* ACTIVITY INPUT OPTIONS */}
-                {selectedActivity.type === 'Multiple Choice' ? (
-                  <div class="space-y-2">
-                    {selectedActivity.options.map((opt: string) => (
-                      <button key={opt} disabled={checked} onClick={() => { setUserAnswer(opt); submitAnswer(opt); }} class={`w-full text-left p-3 rounded-xl text-xs font-medium border transition ${userAnswer === opt ? 'bg-indigo-50 border-indigo-500 text-indigo-700 font-bold' : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'}`}>
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div class="flex gap-2">
-                    <input type="text" placeholder="Type answer here..." disabled={checked} value={userAnswer} onChange={(e) => setUserAnswer(e.target.value)} class="flex-grow p-3 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
-                    <button disabled={checked} onClick={() => submitAnswer(userAnswer)} class="bg-indigo-600 text-white font-bold px-4 rounded-xl text-xs hover:bg-indigo-700 transition">Submit</button>
-                  </div>
-                )}
-
-                {/* FRIENDLY ENCOURAGING CORRECTION ENGINE */}
-                {checked && (
-                  <div class={`p-4 rounded-xl border ${isCorrect ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'} space-y-1.5`}>
-                    <div class="flex items-center gap-1.5 font-bold text-sm">
-                      {isCorrect ? <CheckCircle2 size={16} class="text-emerald-600" /> : <AlertCircle size={16} class="text-rose-600" />}
-                      {isCorrect ? "Great job! ✨" : "Almost there! Look at it once more. ❤️"}
+                  {showHint && (
+                    <div class="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-xs">
+                      💡 <strong>Hint:</strong> {activeQuestion.hint}
                     </div>
-                    <p class="text-xs leading-relaxed">{selectedActivity.feedback}</p>
-                    <p class="text-[10px] font-mono mt-1 opacity-80">Explanation: {selectedActivity.explanation}</p>
-                    {!isCorrect && (
-                      <button onClick={() => { setChecked(false); setUserAnswer(''); setShowHint(false); }} class="mt-2 text-xs font-bold text-indigo-600 underline block">Try Again</button>
-                    )}
+                  )}
+
+                  <div class="space-y-1">
+                    <p class="text-xs text-slate-400 font-medium italic">{activeQuestion.instructions}</p>
+                    <p class="text-sm font-bold text-slate-800 bg-slate-50 p-3 rounded-xl leading-relaxed">{activeQuestion.question}</p>
                   </div>
-                )}
+
+                  {/* MULTIPLE CHOICE UI */}
+                  {activeQuestion.options && activeQuestion.options.length > 0 ? (
+                    <div class="space-y-2">
+                      {activeQuestion.options.map((option: string) => (
+                        <button key={option} disabled={checked} onClick={() => { setUserAnswer(option); verifyAnswer(option); }} class={`w-full text-left p-3 rounded-xl text-xs font-medium border transition ${userAnswer === option ? (isCorrect ? 'bg-emerald-50 border-emerald-500 text-emerald-800 font-bold' : 'bg-rose-50 border-rose-500 text-rose-800 font-bold') : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'}`}>
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    /* FILL IN THE BLANK UI */
+                    <div class="flex flex-col gap-2">
+                      <input type="text" placeholder="Type corresponding syntax word..." disabled={checked} value={userAnswer} onChange={(e) => setUserAnswer(e.target.value)} class="w-full p-3 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+                      {!checked && (
+                        <button onClick={() => verifyAnswer(userAnswer)} class="w-full bg-indigo-600 text-white font-bold p-3 rounded-xl text-xs hover:bg-indigo-700 transition">Submit Answer</button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* FIXED & CONDITIONAL ENCOURAGING CORRECTION ENGINE */}
+                  {checked && (
+                    <div class={`p-4 rounded-xl border ${isCorrect ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'} space-y-3`}>
+                      <div class="flex items-center gap-1.5 font-bold text-xs">
+                        {isCorrect ? <CheckCircle2 size={16} class="text-emerald-600" /> : <AlertCircle size={16} class="text-rose-600" />}
+                        {isCorrect ? "Great job! ✨" : "Almost there! Look at it once more. ❤️"}
+                      </div>
+                      
+                      {/* Fixed conditional layout: Only render praise details when correct */}
+                      <p class="text-xs leading-relaxed opacity-95">
+                        {isCorrect ? activeQuestion.explanation : "Double-check the grammatical rule framework box above and try standard syntax adjustment again!"}
+                      </p>
+                      
+                      {/* Premium Button UI transformation for Try Again and Advance controls */}
+                      <div class="pt-1">
+                        {isCorrect ? (
+                          <button onClick={advanceToNextQuestion} class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold p-3 rounded-xl text-xs transition shadow-sm flex justify-center items-center gap-1">
+                            {currentQuestionIndex < lessonQuestions.length - 1 ? "Next Question" : "Finish Lesson"} <ArrowRight size={14} />
+                          </button>
+                        ) : (
+                          <button onClick={resetQuestionState} class="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold p-3 rounded-xl text-xs transition shadow-sm flex justify-center items-center gap-1">
+                            <RotateCcw size={14} /> Try Question Again
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p class="text-xs text-slate-400 italic p-4 text-center">No structural exercises populated under this lesson block yet.</p>
+              )
+            ) : (
+              /* LESSON COMPLETION BADGE CONTAINER */
+              <div class="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-100 rounded-2xl p-6 text-center space-y-4 shadow-sm animate-fade-in">
+                <div class="inline-flex p-3 bg-indigo-100 rounded-full text-indigo-600 text-3xl justify-center items-center">
+                  <Award size={36} />
+                </div>
+                <div class="space-y-1">
+                  <h4 class="text-base font-extrabold text-slate-800">Unit Complete! 🎉</h4>
+                  <p class="text-xs text-slate-500">You successfully handled all 5 interactive grammar questions.</p>
+                </div>
+                <div class="bg-white p-3 rounded-xl border font-bold text-xs text-indigo-700">
+                  + 50 Practice Points Added to Dashboard
+                </div>
+                <button onClick={() => setSelectedLesson(null)} class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold p-3 rounded-xl transition">
+                  Return to Main Path
+                </button>
               </div>
             )}
           </div>
         )}
 
-        {/* TEACHER DASHBOARD */}
+        {/* MASTER AD-HOC TEACHER ANALYTICS FRAMEWORK */}
         {currentTab === 'teacher' && (
           <div class="space-y-4">
             <div class="flex items-center gap-2 text-emerald-700 bg-emerald-50 p-3 rounded-xl border border-emerald-100">
               <ShieldAlert size={18} />
-              <h3 class="text-sm font-bold">Teacher Workspace Dashboard</h3>
+              <h3 class="text-xs font-bold">Teacher Data Portal Workspace</h3>
             </div>
-            
-            <div class="bg-slate-50 p-4 rounded-xl border space-y-3">
-              <h4 class="text-xs font-bold uppercase text-slate-500">Student Progress Matrix</h4>
-              <div class="space-y-2">
-                <div class="flex justify-between items-center text-xs bg-white p-2.5 rounded-lg border">
-                  <div>
-                    <span class="font-bold text-slate-800">nethmi06</span>
-                    <span class="text-[10px] text-slate-400 block">Class Group A</span>
-                  </div>
-                  <span class="bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded text-[10px]">85% Score</span>
-                </div>
-                <div class="flex justify-between items-center text-xs bg-white p-2.5 rounded-lg border">
-                  <div>
-                    <span class="font-bold text-slate-800">amila01</span>
-                    <span class="text-[10px] text-slate-400 block">Class Group A</span>
-                  </div>
-                  <span class="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[10px]">62% Score</span>
-                </div>
+            <div class="bg-slate-50 p-4 rounded-xl border space-y-2">
+              <h4 class="text-xs font-bold uppercase text-slate-500">Realtime Class Score Tracking</h4>
+              <div class="bg-white border rounded-lg p-3 text-xs text-slate-600 space-y-1">
+                <p>• Data tracking array logs fully connected to active instances.</p>
+                <p>• Score database mapping enabled.</p>
               </div>
-            </div>
-
-            <div class="p-4 border-2 border-dashed border-slate-200 rounded-xl text-center bg-slate-50/50">
-              <p class="text-xs font-medium text-slate-500">Bulk CSV Class Import feature can be configured here in Phase 2.</p>
             </div>
           </div>
         )}
       </main>
 
-      {/* MOBILE BOTTOM NAVIGATION TRACK */}
+      {/* MOBILE LOWER DOCK NAVIGATION TRACK */}
       {currentTab !== 'login' && (
         <nav class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-slate-100 py-2.5 px-6 flex justify-around items-center rounded-t-2xl shadow-xl z-20">
           <button onClick={() => userRole === 'student' ? setCurrentTab('dashboard') : setCurrentTab('teacher')} class={`flex flex-col items-center gap-1 text-[10px] font-bold ${currentTab === 'dashboard' || currentTab === 'teacher' ? 'text-indigo-600' : 'text-slate-400'}`}>
-            <LayoutDashboard size={20} /> Dashboard
+            <LayoutDashboard size={18} /> Dashboard
           </button>
           <button onClick={() => setCurrentTab('lessons')} class={`flex flex-col items-center gap-1 text-[10px] font-bold ${currentTab === 'lessons' ? 'text-indigo-600' : 'text-slate-400'}`}>
-            <BookOpen size={20} /> Practice Path
+            <BookOpen size={18} /> Practice Path
           </button>
         </nav>
       )}
