@@ -60,7 +60,8 @@ function App() {
     }
     
     setLoading(true);
-    const internalEmail = `${username.trim().toLowerCase()}@grammar.local`;
+    // Changed internal domain to passing standard format structure (.com)
+    const internalEmail = `${username.trim().toLowerCase()}@grammarup.com`;
 
     const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email: internalEmail,
@@ -324,12 +325,10 @@ function App() {
                         {isCorrect ? "Great job! ✨" : "Almost there! Look at it once more. ❤️"}
                       </div>
                       
-                      {/* Fixed conditional layout: Only render praise details when correct */}
                       <p class="text-xs leading-relaxed opacity-95">
                         {isCorrect ? activeQuestion.explanation : "Double-check the grammatical rule framework box above and try standard syntax adjustment again!"}
                       </p>
                       
-                      {/* Premium Button UI transformation for Try Again and Advance controls */}
                       <div class="pt-1">
                         {isCorrect ? (
                           <button onClick={advanceToNextQuestion} class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold p-3 rounded-xl text-xs transition shadow-sm flex justify-center items-center gap-1">
@@ -349,7 +348,7 @@ function App() {
               )
             ) : (
               /* LESSON COMPLETION BADGE CONTAINER */
-              <div class="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-100 rounded-2xl p-6 text-center space-y-4 shadow-sm animate-fade-in">
+              <div class="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-100 rounded-2xl p-6 text-center space-y-4 shadow-sm">
                 <div class="inline-flex p-3 bg-indigo-100 rounded-full text-indigo-600 text-3xl justify-center items-center">
                   <Award size={36} />
                 </div>
